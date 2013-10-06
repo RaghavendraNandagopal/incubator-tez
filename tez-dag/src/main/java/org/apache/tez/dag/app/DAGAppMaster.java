@@ -77,9 +77,8 @@ import org.apache.tez.dag.api.TezConfiguration;
 import org.apache.tez.dag.api.TezConstants;
 import org.apache.tez.dag.api.TezException;
 import org.apache.tez.dag.api.TezUncheckedException;
+import org.apache.tez.dag.api.client.DAGClientHandler;
 import org.apache.tez.dag.api.client.DAGClientServer;
-import org.apache.tez.dag.api.client.DAGStatus;
-import org.apache.tez.dag.api.client.VertexStatus;
 import org.apache.tez.dag.api.records.DAGProtos.DAGPlan;
 import org.apache.tez.dag.api.records.DAGProtos.PlanKeyValuePair;
 import org.apache.tez.dag.api.records.DAGProtos.VertexPlan;
@@ -241,7 +240,7 @@ public class DAGAppMaster extends AbstractService {
 
     context = new RunningAppContext(conf);
 
-    clientHandler = new DAGClientHandler();
+    clientHandler = new DAGClientHandler(this);
 
     dispatcher = createDispatcher();
     addIfService(dispatcher, false);
@@ -645,7 +644,7 @@ public class DAGAppMaster extends AbstractService {
         + oldState + " new state: " + state);
   }
 
-  synchronized void shutdownTezAM() {
+  public synchronized void shutdownTezAM() {
     sessionStopped.set(true);
     if (currentDAG != null
         && !currentDAG.isComplete()) {
@@ -662,7 +661,7 @@ public class DAGAppMaster extends AbstractService {
     }
   }
 
-  synchronized String submitDAGToAppMaster(DAGPlan dagPlan)
+  public synchronized String submitDAGToAppMaster(DAGPlan dagPlan)
       throws TezException  {
     if(currentDAG != null
         && !state.equals(DAGAppMasterState.IDLE)) {
@@ -697,82 +696,6 @@ public class DAGAppMaster extends AbstractService {
     submittedDAGs.incrementAndGet();
     startDAG(dagPlan);
     return currentDAG.getID().toString();
-  }
-
-  public class DAGClientHandler {
-
-    public List<String> getAllDAGs() throws TezException {
-      return Collections.singletonList(currentDAG.getID().toString());
-    }
-
-    public DAGStatus getDAGStatus(String dagIdStr) throws TezException {
-      return getDAG(dagIdStr).getDAGStatus();
-    }
-
-    public VertexStatus getVertexStatus(String dagIdStr, String vertexName)
-        throws TezException{
-      VertexStatus status = getDAG(dagIdStr).getVertexStatus(vertexName);
-      if(status == null) {
-        throw new TezException("Unknown vertexName: " + vertexName);
-      }
-
-      return status;
-    }
-
-    DAG getDAG(String dagIdStr) throws TezException {
-      TezDAGID dagId = TezDAGID.fromString(dagIdStr);
-      if(dagId == null) {
-        throw new TezException("Bad dagId: " + dagIdStr);
-      }
-
-      if(currentDAG == null) {
-        throw new TezException("No running dag at present");
-      }
-      if(!dagId.equals(currentDAG.getID())) {
-        throw new TezException("Unknown dagId: " + dagIdStr);
-      }
-
-      return currentDAG;
-    }
-
-    public void tryKillDAG(String dagIdStr)
-        throws TezException {
-      DAG dag = getDAG(dagIdStr);
-      LOG.info("Sending client kill to dag: " + dagIdStr);
-      //send a DAG_KILL message
-      sendEvent(new DAGEvent(dag.getID(), DAGEventType.DAG_KILL));
-    }
-
-    public synchronized String submitDAG(DAGPlan dagPlan) throws TezException {
-      return submitDAGToAppMaster(dagPlan);
-    }
-
-    public synchronized void shutdownAM() {
-      LOG.info("Received message to shutdown AM");
-      shutdownTezAM();
-    }
-
-    public synchronized TezSessionStatus getSessionStatus() throws TezException {
-      if (!isSession) {
-        throw new TezException("Unsupported operation as AM not running in"
-            + " session mode");
-      }
-      switch (state) {
-      case NEW:
-      case INITED:
-        return TezSessionStatus.INITIALIZING;
-      case IDLE:
-        return TezSessionStatus.READY;
-      case RUNNING:
-        return TezSessionStatus.RUNNING;
-      case ERROR:
-      case FAILED:
-      case SUCCEEDED:
-      case KILLED:
-        return TezSessionStatus.SHUTDOWN;
-      }
-      return TezSessionStatus.INITIALIZING;
-    }
   }
 
   private class RunningAppContext implements AppContext {
@@ -1352,7 +1275,29 @@ public class DAGAppMaster extends AbstractService {
   }
 
   @SuppressWarnings("unchecked")
-  private void sendEvent(Event<?> event) {
+  public void sendEvent(Event<?> event) {
     dispatcher.getEventHandler().handle(event);
+  }
+
+  public synchronized TezSessionStatus getSessionStatus() throws TezException {
+    if (!isSession) {
+      throw new TezException("Unsupported operation as AM not running in"
+          + " session mode");
+    }
+    switch (state) {
+    case NEW:
+    case INITED:
+      return TezSessionStatus.INITIALIZING;
+    case IDLE:
+      return TezSessionStatus.READY;
+    case RUNNING:
+      return TezSessionStatus.RUNNING;
+    case ERROR:
+    case FAILED:
+    case SUCCEEDED:
+    case KILLED:
+      return TezSessionStatus.SHUTDOWN;
+    }
+    return TezSessionStatus.INITIALIZING;
   }
 }
